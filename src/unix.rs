@@ -39,14 +39,16 @@ struct SubprocessClient {
     input_offset : usize,
     buf : [u8; 65536],
     stdout_bound : Option<usize>,
-    stderr_bound : Option<usize>
+    stderr_bound : Option<usize>,
+    return_on_stdout_fill : bool,
 }
 
 
 // Sends a message and expects to receive the same exact message, one at a time
 impl SubprocessClient {
     fn new(stdin: Option<PipeWriter>, stdout : Option<PipeReader>, stderr : Option<PipeReader>, data : &[u8],
-           stdout_bound : Option<usize>, stderr_bound : Option<usize>) -> SubprocessClient {
+           stdout_bound : Option<usize>, stderr_bound : Option<usize>,
+           return_on_stdout_fill : bool) -> SubprocessClient {
         SubprocessClient {
             stdin: stdin,
             stdout: stdout,
@@ -61,6 +63,7 @@ impl SubprocessClient {
             input_offset : 0,
             stdout_bound : stdout_bound,
             stderr_bound : stderr_bound,
+            return_on_stdout_fill : return_on_stdout_fill,
         }
     }
 
@@ -87,8 +90,8 @@ impl SubprocessClient {
                                } else {
                                   *bound = 0;
                                   do_extend = false;
-                                  if self.stderr.is_none() || self.stderr_bound.unwrap_or(1) == 0 {
-                                      drop(self.stderr.take()); // in case stderr had overrun bound
+                                  if self.return_on_stdout_fill || self.stderr.is_none() || self.stderr_bound.unwrap_or(1) == 0 {
+                                      drop(self.stderr.take());
                                       eof = true;
                                   }
                                }
@@ -286,9 +289,22 @@ pub fn from_stderr(mut stderr: Option<process::ChildStderr>) -> io::Result<Optio
     Ok(Some(PipeReader::from_stderr(process.stderr.take().unwrap())))
 }
 
-
-pub fn subprocess_communicate(mut process : Child, input : &[u8],
-                              stdout_bound : Option<usize>, stderr_bound : Option<usize>) -> (Vec<u8>, Vec<u8>, io::Result<()>) {
+/// Sends input to process and returns stdout and stderr
+/// up until stdout_bound or stderr_bound are reached
+/// If stdout_bound is reached and return_on_stdout_fill is true,
+/// the rest of stderr will not be awaited
+///
+/// Conversely, if stdout_bound is reached and return_on_stderr_fill is false
+/// Then if insufficient stderr is produced and that file descriptor is not closed by
+/// the callee, then the subprocess_communicate will hang until the child produces
+/// up to at least the stderr_bound or closes the stderr file descriptor
+/// This function may return errors if the stdin, stdout or stderr are unable to be set into nonblocking
+/// or if the event loop is unable to be created, otherwise the last return value will be Ok(())
+pub fn subprocess_communicate(mut process : Child,
+                              input : &[u8],
+                              stdout_bound : Option<usize>,
+                              stderr_bound : Option<usize>,
+                              return_on_stdout_fill : bool) -> (Vec<u8>, Vec<u8>, io::Result<()>) {
     let event_loop_result = EventLoop::<SubprocessClient>::new();
     match event_loop_result {
         Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
@@ -320,7 +336,8 @@ pub fn subprocess_communicate(mut process : Child, input : &[u8],
                                                stderr,
                                                input,
                                                stdout_bound,
-                                               stderr_bound);
+                                               stderr_bound,
+                                               return_on_stdout_fill);
     match subprocess.stdout {
        Some(ref sub_stdout) =>
           match event_loop.register(sub_stdout, subprocess.stdout_token, EventSet::readable(),
@@ -371,7 +388,7 @@ fn test_subprocess_pipe() {
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], None, None);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], None, None, true);
      err.unwrap();
      assert_eq!(TEST_DATA.len(), ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -391,7 +408,7 @@ fn test_subprocess_bounded_pipe() {
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(TEST_DATA.len() - 1), None);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(TEST_DATA.len() - 1), None, true);
      err.unwrap();
      assert_eq!(TEST_DATA.len() - 1, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -411,7 +428,33 @@ fn test_subprocess_bounded_yes_stderr0() {
            .stderr(Stdio::piped())
            .spawn().unwrap();
      let bound : usize = 130000;
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), Some(0));
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), Some(0), false);
+     err.unwrap();
+     assert_eq!(bound, ret_stdout.len());
+     assert_eq!(0usize, ret_stderr.len());
+     let mut i : usize = 0;
+     for item in ret_stdout.iter() {
+         let val : u8;
+         if (i & 1) == 1 {
+             val = '\n' as u8;
+         } else {
+             val = 'y' as u8;
+         }
+         assert_eq!(*item, val);
+         i += 1;
+     }
+}
+
+#[test]
+fn test_subprocess_bounded_yes() {
+    let process =
+           Command::new("/usr/bin/yes")
+           .stdin(Stdio::piped())
+           .stdout(Stdio::piped())
+           .stderr(Stdio::piped())
+           .spawn().unwrap();
+     let bound : usize = 130000;
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), Some(bound), true);
      err.unwrap();
      assert_eq!(bound, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -437,7 +480,7 @@ fn test_subprocess_bounded_yes_no_stderr() {
            .stdout(Stdio::piped())
            .spawn().unwrap();
      let bound : usize = 130000;
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), None);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), None, false);
      err.unwrap();
      assert_eq!(bound, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
