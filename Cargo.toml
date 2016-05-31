@@ -2,6 +2,7 @@
 name = "subprocess-communicate"
 version = "0.1.0"
 authors = ["Daniel Reiter Horn <danielrh@dropbox.com>"]
+description = "Provides a communicate primitive similar to python's subprocess.Popen.communicate that allows input to be presented to the process and results to be captured from both stdout and stderr up to an optional bound."
 license = "BSD-3-Clause"
 documentation = "https://github.com/dropbox/rust-subprocess-communicate/tree/master/README.md"
 homepage = "https://github.com/dropbox/rust-subprocess-communicate"
