@@ -1,0 +1,15 @@
+[package]
+name = "subprocess-communicate"
+version = "0.1.0"
+authors = ["Daniel Reiter Horn <danielrh@dropbox.com>"]
+
+[dependencies]
+log = "^0.3.1"
+mio = "^0.5"
+bytes = "^0.3"
+slab = "^0.1"
+nix    = { git = "https://github.com/carllerche/nix-rust", rev = "c4257f8a76" }
+
+#[[bin]]
+#name = "tee"
+#path = "src/main.rs"
