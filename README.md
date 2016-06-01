@@ -13,7 +13,7 @@ or the event loop was unable to be activated.
 Unlike the python interface, this also supports two optional arguments to bound the maximum output size of
 stdout and stderr respectively.
 This is to prevent a process like /usr/bin/yes from actively consuming all system memory and it
-helps reason about maximum resource consumption 
+helps reason about maximum resource consumption
 
 ## Usage
 
