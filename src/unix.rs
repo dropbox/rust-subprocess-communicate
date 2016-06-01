@@ -300,7 +300,7 @@ pub fn from_stderr(mut stderr: Option<process::ChildStderr>) -> io::Result<Optio
 /// up to at least the stderr_bound or closes the stderr file descriptor
 /// This function may return errors if the stdin, stdout or stderr are unable to be set into nonblocking
 /// or if the event loop is unable to be created, otherwise the last return value will be Ok(())
-pub fn subprocess_communicate(mut process : Child,
+pub fn subprocess_communicate(process : &mut Child,
                               input : &[u8],
                               stdout_bound : Option<usize>,
                               stderr_bound : Option<usize>,
@@ -382,13 +382,14 @@ const TEST_DATA : [u8; 1024 * 4096] = [42; 1024 * 4096];
 
 #[test]
 fn test_subprocess_pipe() {
-    let process =
+    let mut process =
            Command::new("/bin/cat")
            .stdin(Stdio::piped())
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], None, None, true);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(&mut process, &TEST_DATA[..], None, None, true);
+     process.wait().unwrap();
      err.unwrap();
      assert_eq!(TEST_DATA.len(), ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -402,13 +403,14 @@ fn test_subprocess_pipe() {
 
 #[test]
 fn test_subprocess_bounded_pipe() {
-    let process =
+    let mut process =
            Command::new("/bin/cat")
            .stdin(Stdio::piped())
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(TEST_DATA.len() - 1), None, true);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(&mut process, &TEST_DATA[..], Some(TEST_DATA.len() - 1), None, true);
+     process.wait().unwrap();
      err.unwrap();
      assert_eq!(TEST_DATA.len() - 1, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -421,14 +423,14 @@ fn test_subprocess_bounded_pipe() {
 
 #[test]
 fn test_subprocess_bounded_yes_stderr0() {
-    let process =
+    let mut process =
            Command::new("/usr/bin/yes")
            .stdin(Stdio::piped())
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
      let bound : usize = 130000;
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), Some(0), false);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(&mut process, &TEST_DATA[..], Some(bound), Some(0), false);
      err.unwrap();
      assert_eq!(bound, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -447,14 +449,14 @@ fn test_subprocess_bounded_yes_stderr0() {
 
 #[test]
 fn test_subprocess_bounded_yes() {
-    let process =
+    let mut process =
            Command::new("/usr/bin/yes")
            .stdin(Stdio::piped())
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
      let bound : usize = 130000;
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), Some(bound), true);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(&mut process, &TEST_DATA[..], Some(bound), Some(bound), true);
      err.unwrap();
      assert_eq!(bound, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
@@ -474,13 +476,13 @@ fn test_subprocess_bounded_yes() {
 
 #[test]
 fn test_subprocess_bounded_yes_no_stderr() {
-    let process =
+    let mut process =
            Command::new("/usr/bin/yes")
            .stdin(Stdio::piped())
            .stdout(Stdio::piped())
            .spawn().unwrap();
      let bound : usize = 130000;
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate(process, &TEST_DATA[..], Some(bound), None, false);
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate(&mut process, &TEST_DATA[..], Some(bound), None, false);
      err.unwrap();
      assert_eq!(bound, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
