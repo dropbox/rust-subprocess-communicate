@@ -41,6 +41,7 @@ struct SubprocessClient {
     stdout_bound : Option<usize>,
     stderr_bound : Option<usize>,
     return_on_stdout_fill : bool,
+    has_shutdown : bool,
 }
 
 
@@ -64,10 +65,14 @@ impl SubprocessClient {
             stdout_bound : stdout_bound,
             stderr_bound : stderr_bound,
             return_on_stdout_fill : return_on_stdout_fill,
+            has_shutdown : false,
         }
     }
 
     fn readable(&mut self, event_loop: &mut EventLoop<SubprocessClient>) -> io::Result<()> {
+        if self.has_shutdown {
+            return Ok(());
+        }
         let mut eof = false;
         let mut buf_bound : usize = cmp::min(self.stdout_bound.unwrap_or(self.buf.len()), self.buf.len());
         if buf_bound == 0 {
@@ -91,6 +96,14 @@ impl SubprocessClient {
                                   *bound = 0;
                                   do_extend = false;
                                   if self.return_on_stdout_fill || self.stderr.is_none() || self.stderr_bound.unwrap_or(1) == 0 {
+                                      match self.stderr {
+                                          Some(ref sub_stderr) =>
+                                              match event_loop.deregister(sub_stderr){
+                                                Err(e) => return Err(e),
+                                                _ => {},
+                                          },
+                                          _ => {},
+                                      }
                                       drop(self.stderr.take());
                                       eof = true;
                                   }
@@ -109,8 +122,17 @@ impl SubprocessClient {
             }
         };
         if eof {
+            match self.stdout {
+               Some(ref sub_stdout) =>
+                   match event_loop.deregister(sub_stdout) {
+                      Err(e) => return Err(e),
+                      _ => {},
+                   },
+               _ => {},
+            }
             drop(self.stdout.take());
             if self.stderr.is_none() {
+                self.has_shutdown = true;
                 event_loop.shutdown();
             }
         }
@@ -118,6 +140,10 @@ impl SubprocessClient {
     }
 
     fn readable_stderr(&mut self, event_loop: &mut EventLoop<SubprocessClient>) -> io::Result<()> {
+        if self.has_shutdown {
+            return Ok(());
+        }
+
         let mut eof = false;
         let mut buf_bound : usize = cmp::min(self.stderr_bound.unwrap_or(self.buf.len()), self.buf.len());
         if buf_bound == 0 {
@@ -143,6 +169,14 @@ impl SubprocessClient {
                                   *bound = 0;
                                   do_extend = false;
                                   if self.stdout.is_none() || self.stdout_bound.unwrap_or(1) == 0 {
+                                      match self.stdout {
+                                          Some(ref sub_stdout) =>
+                                              match event_loop.deregister(sub_stdout){
+                                                  Err(e) => return Err(e),
+                                                  _ => {},
+                                              },
+                                          _ => {},
+                                      }
                                       drop(self.stdout.take()); // in case stdout had overrun bound
                                       eof = true;
                                   }
@@ -160,8 +194,17 @@ impl SubprocessClient {
             }
         };
         if eof {
+            match self.stderr {
+               Some(ref sub_stderr) =>
+                   match event_loop.deregister(sub_stderr){
+                       Err(e) => return Err(e),
+                       _ => {},
+                   },
+               _ => {},
+            }
             drop(self.stderr.take());
             if self.stdout.is_none() {
+                self.has_shutdown = true;
                 event_loop.shutdown();
             }
         }
@@ -169,6 +212,10 @@ impl SubprocessClient {
     }
 
     fn writable(&mut self, event_loop: &mut EventLoop<SubprocessClient>) -> io::Result<()> {
+        if self.has_shutdown {
+            return Ok(());
+        }
+
         let mut ok = true;
         match self.stdin {
             None => unreachable!(),
@@ -188,10 +235,21 @@ impl SubprocessClient {
             }
         }
         if self.input_offset == self.input.len() || !ok {
+            match self.stdin {
+                Some(ref sub_stdin) =>
+                    match event_loop.deregister(sub_stdin) {
+                       Err(e) => return Err(e),
+                       _ => {},
+                    },
+                _ => {},
+            }
             drop(self.stdin.take());
             match self.stderr {
                 None => match self.stdout {
-                            None => event_loop.shutdown(),
+                            None => {
+                                self.has_shutdown = true;
+                                event_loop.shutdown()
+                            },
                             Some(_) => {},
                 },
                 Some(_) => {},
@@ -208,7 +266,6 @@ impl Handler for SubprocessClient {
 
     fn ready(&mut self, event_loop: &mut EventLoop<SubprocessClient>, token: Token,
              _events: EventSet) {
-        //println!("ready {:?} {:?} {:}", token, events, events.is_readable());
         if token == self.stderr_token {
             let _x = self.readable_stderr(event_loop);
         } else {
@@ -330,7 +387,6 @@ pub fn subprocess_communicate(process : &mut Child,
     }
 
 
-    //println!("listen for connections {:?} {:?}", , process.stdout.unwrap().as_raw_fd());
     let mut subprocess = SubprocessClient::new(stdin,
                                                stdout,
                                                stderr,
