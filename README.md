@@ -24,10 +24,11 @@ helps reason about maximum resource consumption
            .stdout(Stdio::piped())
            .stderr(Stdio::piped())
            .spawn().unwrap();
-     let (ret_stdout, ret_stderr, err) = subprocess_communicate::subprocess_communicate(process, // child subprocess
-                                                                                        &TEST_DATA[..], // stdin input
-                                                                                        Some(TEST_DATA.len()), // stdout bound
-                                                                                        None); // stderr bound (if any)
+     let (ret_stdout, ret_stderr, err) = subprocess_communicate::subprocess_communicate(
+        process, // child subprocess
+        &TEST_DATA[..], // stdin input
+        Some(TEST_DATA.len()), // stdout bound
+        None); // stderr bound (if any)
      err.unwrap();
      assert_eq!(TEST_DATA.len() - 1, ret_stdout.len());
      assert_eq!(0usize, ret_stderr.len());
