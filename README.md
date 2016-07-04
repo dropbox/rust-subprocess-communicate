@@ -5,15 +5,15 @@
 This crate should give an interface to communicating with child processes
 similar to python's subprocess.communicate interface from the Popen class.
 
-Pass an input u8 slice and the result should be two Vec<u8> one for stdout and for stderr
-Also an error may be returned in case the subprocess pipes were unable to be changed into nonblock mode
+Pass an input u8 slice and the result should be two Vec<u8>, one for stdout and for stderr.
+Also, an error may be returned in case the subprocess pipes were unable to be changed into nonblock mode
 or the event loop was unable to be activated.
 
 
-Unlike the python interface, this also supports two optional arguments to bound the maximum output size of
+Unlike the Python interface, this also supports two optional arguments to limit the maximum output size of
 stdout and stderr respectively.
-This is to prevent a process like /usr/bin/yes from actively consuming all system memory and it
-helps reason about maximum resource consumption
+This is to prevent a process like `/usr/bin/yes` from consuming all system memory and it
+helps reason about maximum resource consumption.
 
 ## Usage
 
@@ -37,4 +37,3 @@ helps reason about maximum resource consumption
          i += 1;
      }
 ```
-
