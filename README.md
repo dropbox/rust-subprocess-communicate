@@ -17,7 +17,7 @@ helps reason about maximum resource consumption
 
 ## Usage
 
-```
+```rust
     let process =
            Command::new("/bin/cat")
            .stdin(Stdio::piped())
