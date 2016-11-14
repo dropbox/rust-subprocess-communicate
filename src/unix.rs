@@ -8,22 +8,12 @@ use mio::*;
 use std::io;
 use std::process;
 use std::cmp;
-use mio::unix::{PipeReader, PipeWriter};
+
+use mio::deprecated::{TryRead, TryWrite};
+use mio::deprecated::{EventLoop, Handler};
+use mio::deprecated::{PipeReader, PipeWriter};
 #[allow(unused_imports)]
 use std::process::{Command, Stdio, Child};
-
-use std::os::unix::io::{AsRawFd, IntoRawFd};
-use self::nix::fcntl::FcntlArg::F_SETFL;
-use self::nix::fcntl::{fcntl, O_NONBLOCK};
-
-pub fn from_nix_error(err: self::nix::Error) -> io::Error {
-    io::Error::from_raw_os_error(err.errno() as i32)
-}
-
-fn set_nonblock(s: &AsRawFd) -> io::Result<()> {
-    fcntl(s.as_raw_fd(), F_SETFL(O_NONBLOCK)).map_err(from_nix_error)
-                                             .map(|_| ())
-}
 
 
 struct SubprocessClient {
@@ -45,7 +35,6 @@ struct SubprocessClient {
 }
 
 
-// Sends a message and expects to receive the same exact message, one at a time
 impl SubprocessClient {
     fn new(stdin: Option<PipeWriter>, stdout : Option<PipeReader>, stderr : Option<PipeReader>, data : &[u8],
            stdout_bound : Option<usize>, stderr_bound : Option<usize>,
@@ -265,7 +254,7 @@ impl Handler for SubprocessClient {
     type Message = ();
 
     fn ready(&mut self, event_loop: &mut EventLoop<SubprocessClient>, token: Token,
-             _events: EventSet) {
+             _events: Ready) {
         if token == self.stderr_token {
             let _x = self.readable_stderr(event_loop);
         } else {
@@ -277,73 +266,29 @@ impl Handler for SubprocessClient {
     }
 }
 
-#[cfg(not(feature = "mio-stdio"))]
-pub fn from_stdin(mut stdin: Option<process::ChildStdin>) -> io::Result<Option<PipeWriter>> {
+pub fn from_stdin(mut stdin: Option<process::ChildStdin>) -> io::Result<Option<PipeWriter> > {
     match stdin {
       None => return Ok(None),
       Some(_) => {},
     }
-    let local_stdin = stdin.take().unwrap();
-    match set_nonblock(&local_stdin) {
-        Err(e) => return Err(e),
-        _ => {},
-    }
-    return Ok(Some(PipeWriter::from(Io::from_raw_fd(local_stdin.into_raw_fd()))));
+    Ok(Some(PipeWriter::from_stdin(stdin.take().unwrap()).unwrap()))
 }
 
-#[cfg(feature = "mio-stdio")]
-pub fn from_stdin(mut stdin: Option<process::ChildStdin>) -> io::Result<Option<PipeWriter> > {
-    match process.stdin {
-      None => return Ok(None),
-      Some(_) => {},
-    }
-    Ok(Some(PipeWriter::from_stdin(process.stdin.take().unwrap())))
-}
-
-#[cfg(not(feature = "mio-stdio"))]
-pub fn from_stdout(mut stdout: Option<process::ChildStdout>) -> io::Result<Option<PipeReader>> {
+pub fn from_stdout(mut stdout: Option<process::ChildStdout>) -> io::Result<Option<PipeReader> > {
     match stdout {
       None => return Ok(None),
       Some(_) => {},
     }
-    let local_stdout = stdout.take().unwrap();
-    match set_nonblock(&local_stdout) {
-        Err(e) => return Err(e),
-        _ => {},
-    }
-    return Ok(Some(PipeReader::from(Io::from_raw_fd(local_stdout.into_raw_fd()))));
+    Ok(Some(PipeReader::from_stdout(stdout.take().unwrap()).unwrap()))
 }
 
-#[cfg(feature = "mio-stdio")]
-pub fn from_stdout(mut stdout: Option<process::ChildStdout>) -> io::Result<Option<PipeWriter> > {
-    match process.stdout {
-      None => return Ok(None),
-      Some(_) => {},
-    }
-    Ok(Some(PipeReader::from_stdout(process.stdout.take().unwrap())))
-}
 
-#[cfg(not(feature = "mio-stdio"))]
-pub fn from_stderr(mut stderr: Option<process::ChildStderr>) -> io::Result<Option<PipeReader>> {
+pub fn from_stderr(mut stderr: Option<process::ChildStderr>) -> io::Result<Option<PipeReader> > {
     match stderr {
       None => return Ok(None),
       Some(_) => {},
     }
-    let local_stderr = stderr.take().unwrap();
-    match set_nonblock(&local_stderr) {
-        Err(e) => return Err(e),
-        _ => {},
-    }
-    return Ok(Some(PipeReader::from(Io::from_raw_fd(local_stderr.into_raw_fd()))));
-}
-
-#[cfg(feature = "mio-stdio")]
-pub fn from_stderr(mut stderr: Option<process::ChildStderr>) -> io::Result<Option<PipeWriter> > {
-    match process.stderr {
-      None => return Ok(None),
-      Some(_) => {},
-    }
-    Ok(Some(PipeReader::from_stderr(process.stderr.take().unwrap())))
+    Ok(Some(PipeReader::from_stderr(stderr.take().unwrap()).unwrap()))
 }
 
 /// Sends input to process and returns stdout and stderr
@@ -396,7 +341,7 @@ pub fn subprocess_communicate(process : &mut Child,
                                                return_on_stdout_fill);
     match subprocess.stdout {
        Some(ref sub_stdout) =>
-          match event_loop.register(sub_stdout, subprocess.stdout_token, EventSet::readable(),
+          match event_loop.register(sub_stdout, subprocess.stdout_token, Ready::readable(),
                                                    PollOpt::level()) {
             Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
             Ok(_) =>{},
@@ -405,7 +350,7 @@ pub fn subprocess_communicate(process : &mut Child,
     }
 
     match subprocess.stderr {
-        Some(ref sub_stderr) => match event_loop.register(sub_stderr, subprocess.stderr_token, EventSet::readable(),
+        Some(ref sub_stderr) => match event_loop.register(sub_stderr, subprocess.stderr_token, Ready::readable(),
                         PollOpt::level()) {
            Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
            Ok(_) => {},
@@ -415,7 +360,7 @@ pub fn subprocess_communicate(process : &mut Child,
 
     // Connect to the server
     match subprocess.stdin {
-        Some (ref sub_stdin) => match event_loop.register(sub_stdin, subprocess.stdin_token, EventSet::writable(),
+        Some (ref sub_stdin) => match event_loop.register(sub_stdin, subprocess.stdin_token, Ready::writable(),
                         PollOpt::level()) {
            Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
            Ok(_) => {},
