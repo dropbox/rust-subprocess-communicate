@@ -1,8 +1,6 @@
 #![cfg(unix)]
 
 extern crate mio;
-extern crate bytes;
-extern crate nix;
 use std::mem;
 use mio::*;
 use std::io;

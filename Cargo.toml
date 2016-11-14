@@ -11,11 +11,7 @@ keywords = ["subprocess", "child", "stdio", "stdout", "process"]
 readme = "README.md"
 
 [dependencies]
-log = "^0.3"
 mio = "^0.6"
-bytes = "^0.3"
-slab = "^0.3"
-nix    = "^0.7"
 
 #[[bin]]
 #name = "tee"
