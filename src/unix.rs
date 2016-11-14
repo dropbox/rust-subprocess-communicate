@@ -10,7 +10,6 @@ use std::process;
 use std::cmp;
 
 use mio::deprecated::{TryRead, TryWrite};
-use mio::deprecated::{EventLoop, Handler};
 use mio::deprecated::{PipeReader, PipeWriter};
 #[allow(unused_imports)]
 use std::process::{Command, Stdio, Child};
@@ -32,6 +31,7 @@ struct SubprocessClient {
     stderr_bound : Option<usize>,
     return_on_stdout_fill : bool,
     has_shutdown : bool,
+    child_shutdown : bool,
 }
 
 
@@ -55,10 +55,11 @@ impl SubprocessClient {
             stderr_bound : stderr_bound,
             return_on_stdout_fill : return_on_stdout_fill,
             has_shutdown : false,
+            child_shutdown : false,
         }
     }
 
-    fn readable(&mut self, event_loop: &mut EventLoop<SubprocessClient>) -> io::Result<()> {
+    fn readable(&mut self, poll: &mut Poll) -> io::Result<()> {
         if self.has_shutdown {
             return Ok(());
         }
@@ -87,7 +88,7 @@ impl SubprocessClient {
                                   if self.return_on_stdout_fill || self.stderr.is_none() || self.stderr_bound.unwrap_or(1) == 0 {
                                       match self.stderr {
                                           Some(ref sub_stderr) =>
-                                              match event_loop.deregister(sub_stderr){
+                                              match poll.deregister(sub_stderr){
                                                 Err(e) => return Err(e),
                                                 _ => {},
                                           },
@@ -113,7 +114,7 @@ impl SubprocessClient {
         if eof {
             match self.stdout {
                Some(ref sub_stdout) =>
-                   match event_loop.deregister(sub_stdout) {
+                   match poll.deregister(sub_stdout) {
                       Err(e) => return Err(e),
                       _ => {},
                    },
@@ -122,13 +123,13 @@ impl SubprocessClient {
             drop(self.stdout.take());
             if self.stderr.is_none() {
                 self.has_shutdown = true;
-                event_loop.shutdown();
+                self.child_shutdown = true;
             }
         }
         return Ok(());
     }
 
-    fn readable_stderr(&mut self, event_loop: &mut EventLoop<SubprocessClient>) -> io::Result<()> {
+    fn readable_stderr(&mut self, poll: &mut Poll) -> io::Result<()> {
         if self.has_shutdown {
             return Ok(());
         }
@@ -160,7 +161,7 @@ impl SubprocessClient {
                                   if self.stdout.is_none() || self.stdout_bound.unwrap_or(1) == 0 {
                                       match self.stdout {
                                           Some(ref sub_stdout) =>
-                                              match event_loop.deregister(sub_stdout){
+                                              match poll.deregister(sub_stdout){
                                                   Err(e) => return Err(e),
                                                   _ => {},
                                               },
@@ -185,7 +186,7 @@ impl SubprocessClient {
         if eof {
             match self.stderr {
                Some(ref sub_stderr) =>
-                   match event_loop.deregister(sub_stderr){
+                   match poll.deregister(sub_stderr){
                        Err(e) => return Err(e),
                        _ => {},
                    },
@@ -194,13 +195,13 @@ impl SubprocessClient {
             drop(self.stderr.take());
             if self.stdout.is_none() {
                 self.has_shutdown = true;
-                event_loop.shutdown();
+                self.child_shutdown = true;
             }
         }
         return Ok(());
     }
 
-    fn writable(&mut self, event_loop: &mut EventLoop<SubprocessClient>) -> io::Result<()> {
+    fn writable(&mut self, poll: &mut Poll) -> io::Result<()> {
         if self.has_shutdown {
             return Ok(());
         }
@@ -226,7 +227,7 @@ impl SubprocessClient {
         if self.input_offset == self.input.len() || !ok {
             match self.stdin {
                 Some(ref sub_stdin) =>
-                    match event_loop.deregister(sub_stdin) {
+                    match poll.deregister(sub_stdin) {
                        Err(e) => return Err(e),
                        _ => {},
                     },
@@ -237,7 +238,7 @@ impl SubprocessClient {
                 None => match self.stdout {
                             None => {
                                 self.has_shutdown = true;
-                                event_loop.shutdown()
+                                self.child_shutdown = true
                             },
                             Some(_) => {},
                 },
@@ -247,21 +248,15 @@ impl SubprocessClient {
         return Ok(());
     }
 
-}
-
-impl Handler for SubprocessClient {
-    type Timeout = usize;
-    type Message = ();
-
-    fn ready(&mut self, event_loop: &mut EventLoop<SubprocessClient>, token: Token,
+    fn ready(&mut self, poll: &mut Poll, token: Token,
              _events: Ready) {
         if token == self.stderr_token {
-            let _x = self.readable_stderr(event_loop);
+            let _x = self.readable_stderr(poll);
         } else {
-            let _x = self.readable(event_loop);
+            let _x = self.readable(poll);
         }
         if token == self.stdin_token {
-            let _y = self.writable(event_loop);
+            let _y = self.writable(poll);
         }
     }
 }
@@ -307,12 +302,6 @@ pub fn subprocess_communicate(process : &mut Child,
                               stdout_bound : Option<usize>,
                               stderr_bound : Option<usize>,
                               return_on_stdout_fill : bool) -> (Vec<u8>, Vec<u8>, io::Result<()>) {
-    let event_loop_result = EventLoop::<SubprocessClient>::new();
-    match event_loop_result {
-        Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
-        Ok(_) => {},
-    }
-    let mut event_loop = event_loop_result.unwrap();
     let stdin : Option<PipeWriter>;
     match from_stdin(process.stdin.take()) {
         Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
@@ -339,9 +328,10 @@ pub fn subprocess_communicate(process : &mut Child,
                                                stdout_bound,
                                                stderr_bound,
                                                return_on_stdout_fill);
+    let mut poll = Poll::new().unwrap();
     match subprocess.stdout {
        Some(ref sub_stdout) =>
-          match event_loop.register(sub_stdout, subprocess.stdout_token, Ready::readable(),
+          match poll.register(sub_stdout, subprocess.stdout_token, Ready::readable(),
                                                    PollOpt::level()) {
             Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
             Ok(_) =>{},
@@ -350,7 +340,7 @@ pub fn subprocess_communicate(process : &mut Child,
     }
 
     match subprocess.stderr {
-        Some(ref sub_stderr) => match event_loop.register(sub_stderr, subprocess.stderr_token, Ready::readable(),
+        Some(ref sub_stderr) => match poll.register(sub_stderr, subprocess.stderr_token, Ready::readable(),
                         PollOpt::level()) {
            Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
            Ok(_) => {},
@@ -360,17 +350,20 @@ pub fn subprocess_communicate(process : &mut Child,
 
     // Connect to the server
     match subprocess.stdin {
-        Some (ref sub_stdin) => match event_loop.register(sub_stdin, subprocess.stdin_token, Ready::writable(),
+        Some (ref sub_stdin) => match poll.register(sub_stdin, subprocess.stdin_token, Ready::writable(),
                         PollOpt::level()) {
            Err(e) => return (Vec::<u8>::new(), Vec::<u8>::new(), Err(e)),
            Ok(_) => {},
          },
          None => {},
     }
-
-    // Start the event loop
-    event_loop.run(&mut subprocess).unwrap();
-    //let res = process.wait();
+    let mut events = Events::with_capacity(1024);
+    while !subprocess.child_shutdown {
+        poll.poll(&mut events, None).unwrap();
+        for event in events.iter() {
+            subprocess.ready(&mut poll, event.token(), event.kind())
+        }
+    }
 
     let ret_stdout = mem::replace(&mut subprocess.output, Vec::<u8>::new());
     let ret_stderr = mem::replace(&mut subprocess.output_stderr, Vec::<u8>::new());
